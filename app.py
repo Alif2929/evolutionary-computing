@@ -1,9 +1,8 @@
 
 import streamlit as st
+import pandas as pd
 import random
-import csv
 import io
-from collections import Counter
 
 st.set_page_config(
     page_title="Evolutionary Computing",
@@ -13,7 +12,8 @@ st.set_page_config(
 st.title("Evolutionary Computing")
 st.subheader("Genetic Algorithm - TV Scheduling")
 
-name = st.text_input("Student Name", "Alif2929")
+# Student information
+name = st.text_input("Student Name", "")
 matric = st.text_input("Matric Number", "")
 
 st.write("Course: JIE42903 - Evolutionary Computing")
@@ -22,91 +22,174 @@ st.write("Matric Number:", matric)
 
 st.divider()
 
-programs = {
-    "music_program": 0.3,
-    "reality_show": 0.4,
-    "news": 0.5,
-    "documentary": 0.4,
-    "tv_series_a": 0.5,
-    "movie_a": 0.5,
-    "live_soccer": 0.6,
-    "movie_b": 0.5,
-    "tv_series_b": 0.6,
-    "Boxing": 0.1
-}
+# Load rating data from CSV
+@st.cache_data
+def load_data():
+    return pd.read_csv("ratings.csv")
 
-hours = list(range(6, 24))
-names = list(programs.keys())
+try:
+    df = load_data()
+except Exception as e:
+    st.error(f"Unable to load ratings.csv: {e}")
+    st.stop()
 
-def create_schedule():
-    return [random.choice(names) for _ in hours]
+if "Program" not in df.columns:
+    st.error("CSV must contain a Program column.")
+    st.stop()
 
+hours = [f"{h:02d}:00" for h in range(6, 24)]
+
+missing = [h for h in hours if h not in df.columns]
+
+if missing:
+    st.error(f"Missing time columns: {missing}")
+    st.stop()
+
+if df.empty or df["Program"].isna().any():
+    st.error("CSV contains missing program data.")
+    st.stop()
+
+programs = df["Program"].astype(str).tolist()
+ratings = df[hours].astype(float).values
+
+if (ratings < 0).any() or (ratings > 1).any():
+    st.error("Ratings must be between 0 and 1.")
+    st.stop()
+
+# Genetic Algorithm
 def fitness(schedule):
-    total = sum(programs[p] for p in schedule)
-    counts = Counter(schedule)
-    penalty = sum(
-        max(0, count - 3) * 0.4
-        for count in counts.values()
+    return sum(
+        ratings[program_index, slot]
+        for slot, program_index in enumerate(schedule)
     )
-    return round(total - penalty, 2)
 
-def crossover(parent1, parent2):
-    point = random.randint(1, len(hours) - 1)
-    return parent1[:point] + parent2[point:]
+def create_schedule(rng):
+    return [
+        rng.randrange(len(programs))
+        for _ in hours
+    ]
 
-def mutate(schedule, rate):
+def crossover(parent1, parent2, rng):
+    point = rng.randint(1, len(hours) - 1)
+
+    child = (
+        parent1[:point] +
+        parent2[point:]
+    )
+
+    return child
+
+def mutate(schedule, mutation_rate, rng):
     child = schedule.copy()
+
     for i in range(len(child)):
-        if random.random() < rate:
-            child[i] = random.choice(names)
+        if rng.random() < mutation_rate:
+            choices = [
+                p for p in range(len(programs))
+                if p != child[i]
+            ]
+            child[i] = rng.choice(choices)
+
     return child
 
 def genetic_algorithm(cr, mr, seed):
-    random.seed(seed)
-    population = [create_schedule() for _ in range(50)]
 
-    for generation in range(100):
-        population.sort(key=fitness, reverse=True)
-        new_population = population[:2]
+    rng = random.Random(seed)
 
-        while len(new_population) < 50:
-            parent1, parent2 = random.sample(
-                population[:20], 2
-            )
+    population_size = 50
+    generations = 100
+    elitism = 2
 
-            if random.random() < cr:
-                child = crossover(parent1, parent2)
+    population = [
+        create_schedule(rng)
+        for _ in range(population_size)
+    ]
+
+    for generation in range(generations):
+
+        population.sort(
+            key=fitness,
+            reverse=True
+        )
+
+        new_population = population[:elitism]
+
+        while len(new_population) < population_size:
+
+            # Select parents from top 20
+            parent1 = rng.choice(population[:20])
+            parent2 = rng.choice(population[:20])
+
+            if rng.random() < cr:
+                child = crossover(
+                    parent1,
+                    parent2,
+                    rng
+                )
             else:
                 child = parent1.copy()
 
-            child = mutate(child, mr)
+            child = mutate(child, mr, rng)
+
             new_population.append(child)
 
         population = new_population
 
-    best = max(population, key=fitness)
+    population.sort(
+        key=fitness,
+        reverse=True
+    )
+
+    best = population[0]
+
     return best, fitness(best)
 
-settings = {
-    "Default": (0.80, 0.20),
-    "Trial 1": (0.95, 0.05),
-    "Trial 2": (0.50, 0.03),
-    "Trial 3": (0.95, 0.01)
-}
+# Trial history
+if "history" not in st.session_state:
+    st.session_state.history = []
 
+if "current_result" not in st.session_state:
+    st.session_state.current_result = None
+
+# Interface
 st.header("Genetic Algorithm Settings")
 
-trial = st.selectbox(
-    "Select Trial",
-    list(settings.keys())
+trial_name = st.text_input(
+    "Trial Name",
+    value="Default"
 )
 
-cr, mr = settings[trial]
+col1, col2 = st.columns(2)
 
-st.write("Crossover Rate:", cr)
-st.write("Mutation Rate:", mr)
+with col1:
+    cr = st.slider(
+        "Crossover Rate (CO_R)",
+        min_value=0.0,
+        max_value=0.95,
+        value=0.80,
+        step=0.05
+    )
+
+with col2:
+    mr = st.number_input(
+        "Mutation Rate (MUT_R)",
+        min_value=0.01,
+        max_value=0.20,
+        value=0.20,
+        step=0.01,
+        format="%.2f"
+    )
+
+st.caption(
+    "Assignment note: Default MUT_R is 0.20 "
+    "on page 1, while page 2 specifies an "
+    "experimental range of 0.01 to 0.05. "
+    "The trial values can follow the latter range."
+)
+
 st.write("Population Size: 50")
 st.write("Generations: 100")
+st.write("Elitism: 2")
 
 seed = st.number_input(
     "Random Seed",
@@ -115,75 +198,104 @@ seed = st.number_input(
     step=1
 )
 
-if "history" not in st.session_state:
-    st.session_state.history = []
-
-if "schedule" not in st.session_state:
-    st.session_state.schedule = None
-
 if st.button("Run Genetic Algorithm"):
-    best, score = genetic_algorithm(cr, mr, int(seed))
 
-    st.session_state.schedule = best
-    st.session_state.score = score
-    st.session_state.current_trial = trial
-
-    st.session_state.history.append({
-        "Trial": trial,
-        "CO_R": cr,
-        "MUT_R": mr,
-        "Total Ratings": score
-    })
-
-if st.session_state.schedule is not None:
-    st.success(
-        f"{st.session_state.current_trial} | "
-        f"Total Ratings = {st.session_state.score:.2f}"
+    best, score = genetic_algorithm(
+        cr,
+        mr,
+        int(seed)
     )
 
-    rows = []
+    schedule_rows = []
 
-    for hour, program in zip(
-        hours, st.session_state.schedule
-    ):
-        rows.append({
-            "Time Slot": f"{hour:02d}:00",
-            "Program": program,
-            "Rating": programs[program]
+    for slot, program_index in enumerate(best):
+
+        schedule_rows.append({
+            "Time Slot": hours[slot],
+            "Program": programs[program_index],
+            "Rating": ratings[program_index, slot]
         })
 
+    result = {
+        "Trial": trial_name,
+        "CO_R": cr,
+        "MUT_R": mr,
+        "Total Ratings": round(score, 2)
+    }
+
+    # Replace an existing trial with the same name
+    st.session_state.history = [
+        item for item in st.session_state.history
+        if item["Trial"] != trial_name
+    ]
+
+    st.session_state.history.append(result)
+
+    st.session_state.current_result = {
+        "summary": result,
+        "schedule": schedule_rows
+    }
+
+# Display schedule
+if st.session_state.current_result is not None:
+
+    current = st.session_state.current_result
+
+    st.success(
+        f"{current['summary']['Trial']} | "
+        f"Total Ratings = "
+        f"{current['summary']['Total Ratings']:.2f}"
+    )
+
     st.subheader("Generated TV Schedule")
-    st.dataframe(rows, use_container_width=True)
+
+    st.dataframe(
+        pd.DataFrame(current["schedule"]),
+        use_container_width=True,
+        hide_index=True
+    )
 
 st.divider()
+
+# Comparison
 st.header("Trial Comparison Summary")
 
 if st.session_state.history:
-    st.dataframe(
-        st.session_state.history,
-        use_container_width=True
+
+    history_df = pd.DataFrame(
+        st.session_state.history
     )
 
-    output = io.StringIO()
-    writer = csv.DictWriter(
-        output,
-        fieldnames=[
-            "Trial", "CO_R", "MUT_R", "Total Ratings"
-        ]
+    st.dataframe(
+        history_df,
+        use_container_width=True,
+        hide_index=True
     )
-    writer.writeheader()
-    writer.writerows(st.session_state.history)
+
+    csv_data = history_df.to_csv(
+        index=False
+    ).encode("utf-8")
 
     st.download_button(
         "Download History (CSV)",
-        data=output.getvalue(),
+        data=csv_data,
         file_name="trial_history.csv",
         mime="text/csv"
     )
 
     if st.button("Clear History"):
         st.session_state.history = []
-        st.session_state.schedule = None
+        st.session_state.current_result = None
         st.rerun()
+
 else:
     st.info("Run a trial to see the results.")
+
+# Dataset preview
+with st.expander("View Rating Dataset"):
+
+    st.dataframe(
+        df,
+        use_container_width=True,
+        hide_index=True
+    )
