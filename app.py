@@ -190,3 +190,50 @@ show_trial(tab3, "Trial 3", 0.95, 0.01, 0.05)
 
 # -------------------- HISTORY OF ALL RUNS --------------------
 st.divider()
+
+
+# -------------------- HISTORY OF ALL RUNS --------------------
+st.header("History (all runs)")
+
+if st.session_state.trial_results:
+
+    history_rows = [
+        st.session_state.trial_results[trial]["summary"]
+        for trial in TRIAL_ORDER
+        if trial in st.session_state.trial_results
+    ]
+
+    history_df = pd.DataFrame(history_rows)
+
+    st.dataframe(
+        history_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    csv_data = history_df.to_csv(
+        index=False
+    ).encode("utf-8")
+
+    st.download_button(
+        "Download History (CSV)",
+        data=csv_data,
+        file_name="trial_history.csv",
+        mime="text/csv"
+    )
+
+    if st.button("Clear History"):
+        st.session_state.trial_results = {}
+        st.rerun()
+
+else:
+    st.info("No runs yet. Run an experiment to see the results.")
+
+# -------------------- RATING DATASET --------------------
+with st.expander("View Modified Rating Dataset"):
+
+    st.dataframe(
+        rating_df,
+        use_container_width=True,
+        hide_index=True
+    )
